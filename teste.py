@@ -161,7 +161,7 @@ def process_parcelas(input_dir, output_dir):
 
             index_calculator = IndexCalculation(red=red, green=green, blue=blue)
 
-            hue_index = index_calculator.hue()
+            hue_index = index_calculator.ngrdi()
             cv2.imwrite("./hue.jpg", hue_index)
 
             # Calcular os índices desejados
@@ -199,6 +199,12 @@ cv2.imwrite('img_cropped.png', image)
 
 show_cropped_image(image)
 
+#
+#
+# Rotacionar crop, e permitir a rotação à 90°
+#
+#
+
 # Carrega o modelo YOLO
 model = YOLO("best.pt")
 
@@ -228,8 +234,21 @@ for result in results:
         print(f'Salvando parcela {cont}')
 
 
+#
+#
+# Ordenar e nomear parcelas
+#
+#
+
 output_indices_dir = './parcelas_indice'
 if os.path.exists(output_indices_dir):
         shutil.rmtree(output_indices_dir)
 os.makedirs(output_indices_dir)
 process_parcelas(output_dir, output_indices_dir)
+
+
+#
+#
+# Carregar planilha de campo e correlacionar com parcelas extraídos
+#
+#
