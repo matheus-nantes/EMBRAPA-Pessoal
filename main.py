@@ -8,7 +8,8 @@ import shutil
 from screeninfo import get_monitors
 from tkinter import Tk, filedialog, simpledialog
 from index_calculation import IndexCalculation
-from sklearn.cluster import KMeans
+
+import csv
 
 def select_file():
     root = Tk()
@@ -25,6 +26,11 @@ print(f"Arquivo selecionado: {file_path}")
 runs_dir = './runs'
 if os.path.exists(runs_dir):
     shutil.rmtree(runs_dir)
+
+output_dir = './parcelas'
+if os.path.exists(output_dir):
+    shutil.rmtree(output_dir)
+os.makedirs(output_dir)
 
 output_indices_dir = './parcelas_indice'
 if os.path.exists(output_indices_dir):
@@ -177,22 +183,23 @@ def find_centroid(polygon):
     cy = int(M["m01"] / M["m00"])
     return np.array([cx, cy])
 
-def sort_polygons(polygons, n_lines):
-    # centroides 
-    centroids = np.array([find_centroid(poly) for poly in polygons])
-    
-    # K-means clustering - polígonos em linhas
-    kmeans = KMeans(n_clusters=n_lines, random_state=0).fit(centroids)
-    labels = kmeans.labels_
-    
-    #
+def sort_polygons(polygons, n_lines, zigzag):
+    y_coords = np.array([find_centroid(poly)[1] for poly in polygons])
+    y_min, y_max = y_coords.min(), y_coords.max()
+    line_height = (y_max - y_min) / n_lines
+    line_bounds = [(y_min + i * line_height, y_min + (i + 1) * line_height) for i in range(n_lines)]
+
     sorted_polygons = []
-    for line in range(n_lines):
-        line_polygons = [poly for poly, label in zip(polygons, labels) if label == line]
-        line_polygons.sort(key=lambda poly: find_centroid(poly)[0])  # Ordenar por coordenada x
+    for line_idx, (lower, upper) in enumerate(line_bounds):
+        line_polygons = [poly for poly in polygons if lower <= find_centroid(poly)[1] < upper]
+        line_polygons.sort(key=lambda poly: find_centroid(poly)[0])
+        
+        if zigzag and line_idx % 2 == 1:
+            line_polygons.reverse()
+        
         for col, poly in enumerate(line_polygons):
-            sorted_polygons.append((line, col, poly))
-    
+            sorted_polygons.append((line_idx + 1, col + 1, poly))  # Começa em (1,1)
+
     return sorted_polygons
 
 select_aoi(clone)
@@ -212,24 +219,31 @@ cropped_image = cropped_image[y:y+h, x:x+w]
 angle = get_rotation_angle()
 rotated_image = rotate_image(cropped_image, angle)
 show_cropped_image(rotated_image)
-cv2.imwrite("./rotated.png",rotated_image)
+cv2.imwrite("./rotated.png", rotated_image)
 
 model_path = "best.pt"
 model = YOLO(model_path)
 
 results = model.predict(source=rotated_image, show_labels=True, save=True)
 
-output_dir = 'parcelas'
 os.makedirs(output_dir, exist_ok=True)
 
 cont = 0
 polygons = [np.array(poly, dtype=np.int32) for result in results for poly in result.masks.xy if len(poly) > 0]
 n_lines = simpledialog.askinteger("Input", "Digite o número de linhas:")
-sorted_polygons = sort_polygons(polygons, n_lines)
+zigzag = simpledialog.askstring("Input", "Deseja ordenar em zigue-zague? (sim/não)").lower() == 'sim'
+sorted_polygons = sort_polygons(polygons, n_lines, zigzag)
 
-# Carregar imagem rotated.png para adicionar anotações
 annotated_image = rotated_image.copy()
+data = []
 
+y_min, y_max = np.min([find_centroid(poly)[1] for poly in polygons]), np.max([find_centroid(poly)[1] for poly in polygons])
+line_height = (y_max - y_min) / n_lines
+
+for i in range(1, n_lines):
+    y = int(y_min + i * line_height)
+    cv2.line(annotated_image, (0, y), (annotated_image.shape[1], y), (0, 255, 0), 2)
+    
 for row, col, poly in sorted_polygons:
     mask = np.zeros_like(rotated_image)
     cv2.fillPoly(mask, [expand_polygon(poly, scale=1.1)], (255,) * mask.shape[2])
@@ -242,12 +256,17 @@ for row, col, poly in sorted_polygons:
     cont += 1
     print(f'Salvando parcela {cont} na posição (linha {row}, coluna {col})')
     
-    # Encontrar o centróide e adicionar o texto
     centroid = find_centroid(poly)
     cv2.putText(annotated_image, f'{row},{col}', (centroid[0], centroid[1]), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 2, cv2.LINE_AA)
+    
+    data.append([row, col, f'parcela-{row}-{col}.png'])
 
-# Salvar a imagem anotada
 cv2.imwrite("./rotated_annotated.png", annotated_image)
+
+with open('data.csv', mode='w', newline='') as file:
+    writer = csv.writer(file)
+    writer.writerow(['Linha', 'Coluna', 'Arquivo'])
+    writer.writerows(data)
 
 #process_parcelas(output_dir, output_indices_dir)
 
