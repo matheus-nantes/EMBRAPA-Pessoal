@@ -175,32 +175,124 @@ def expand_polygon(polygon, scale=1.1):
     expanded_polygon = scale * (polygon - center) + center
     return expanded_polygon.astype(np.int32)
 
-def find_centroid(polygon):
-    M = cv2.moments(polygon)
-    if M["m00"] == 0:
-        return np.array([0, 0])
-    cx = int(M["m10"] / M["m00"])
-    cy = int(M["m01"] / M["m00"])
-    return np.array([cx, cy])
-
-def sort_polygons(polygons, n_lines, zigzag):
-    y_coords = np.array([find_centroid(poly)[1] for poly in polygons])
-    y_min, y_max = y_coords.min(), y_coords.max()
-    line_height = (y_max - y_min) / n_lines
-    line_bounds = [(y_min + i * line_height, y_min + (i + 1) * line_height) for i in range(n_lines)]
-
+def sort_polygons(polygons, zigzag):
     sorted_polygons = []
-    for line_idx, (lower, upper) in enumerate(line_bounds):
-        line_polygons = [poly for poly in polygons if lower <= find_centroid(poly)[1] < upper]
-        line_polygons.sort(key=lambda poly: find_centroid(poly)[0])
+    line_count = 0
+
+    while polygons:
+        # Encontrar o polígono mais superior à esquerda
+        top_left_polygon = find_top_left_polygon(polygons)
+        if top_left_polygon is None:
+            break
+        #Adiciona o primeiro da linha
+        line_count += 1
+        sorted_polygons.append((line_count, 1, top_left_polygon))
+
+        #remove o pivo
+        polygons = [poly for poly in polygons if not np.array_equal(poly, top_left_polygon)]
         
-        if zigzag and line_idx % 2 == 1:
-            line_polygons.reverse()
+        pivot = top_left_polygon
+        same_line_polygons = []
         
-        for col, poly in enumerate(line_polygons):
-            sorted_polygons.append((line_idx + 1, col + 1, poly))  # Começa em (1,1)
+        # Determinar os limites verticais do polígono pivô
+        x, y, w, h = cv2.boundingRect(pivot)
+        y_min = y
+        y_max = y + h
+        
+        # Encontrar polígonos cujos centroides estejam dentro dos limites do pivô
+        for poly in polygons:
+            centroid = find_centroid(poly)
+            if y_min <= centroid[1] <= y_max:
+                same_line_polygons.append(poly)
+        
+        # Encontrar o polígono mais próximo em x do pivô na mesma linha
+        closest_polygon = find_closest_polygon(same_line_polygons, pivot)
+        
+        col_count = 1
+        
+        # Adicionar os polígonos mais próximos à lista de polígonos ordenados
+        while closest_polygon is not None:
+            sorted_polygons.append((line_count, col_count, closest_polygon))
+            col_count += 1
+            # Remover o 
+            # polígono processado
+            polygons = [poly for poly in polygons if not np.array_equal(poly, closest_polygon)]
+
+            # Definir o polígono mais próximo como novo pivô
+            pivot = closest_polygon
+
+            # Reencontrar polígonos na mesma linha com o novo pivô
+            same_line_polygons = []
+            x, y, w, h = cv2.boundingRect(pivot)
+            y_min = y
+            y_max = y + h
+            for poly in polygons:
+                centroid = find_centroid(poly)
+                if y_min <= centroid[1] <= y_max:
+                    same_line_polygons.append(poly)
+            
+            # Encontrar novo polígono mais próximo em x
+            closest_polygon = find_closest_polygon(same_line_polygons, pivot)
 
     return sorted_polygons
+# y_min, y_max = y_coords.min(), y_coords.max()
+    # line_height = (y_max - y_min) / n_lines
+    # line_bounds = [(y_min + i * line_height, y_min + (i + 1) * line_height) for i in range(n_lines)]
+
+    # sorted_polygons = []
+    # for line_idx, (lower, upper) in enumerate(line_bounds):
+    #     line_polygons = [poly for poly in polygons if lower <= find_centroid(poly)[1] < upper]
+    #     line_polygons.sort(key=lambda poly: find_centroid(poly)[0])
+        
+    #     if zigzag and line_idx % 2 == 1:
+    #         line_polygons.reverse()
+        
+    #     for col, poly in enumerate(line_polygons):
+    #         sorted_polygons.append((line_idx + 1, col + 1, poly))  # Começa em (1,1)
+
+    # return sorted_polygons
+
+
+def find_top_left_polygon(polygons):
+    if not polygons:
+        return None
+
+    top_left_polygon = polygons[0]
+    x_tl, y_tl, _, _ = cv2.boundingRect(top_left_polygon)
+
+    for poly in polygons[1:]:
+        x, y, _, _ = cv2.boundingRect(poly)
+        if x < x_tl or (x == x_tl and y < y_tl):
+            top_left_polygon = poly
+            x_tl, y_tl = x, y
+    
+    return top_left_polygon
+
+def find_centroid(poly):
+    M = cv2.moments(poly)
+    if M['m00'] == 0:
+        return np.array([0, 0])
+    cx = int(M['m10'] / M['m00'])
+    cy = int(M['m01'] / M['m00'])
+    return np.array([cx, cy])
+
+def find_closest_polygon(polygons, pivot):
+    if not polygons:
+        return None
+
+    pivot_centroid = find_centroid(pivot)
+    closest_polygon = polygons[0]
+    closest_distance = abs(find_centroid(closest_polygon)[0] - pivot_centroid[0])
+
+    for poly in polygons[1:]:
+        centroid = find_centroid(poly)
+        distance = abs(centroid[0] - pivot_centroid[0])
+        if distance < closest_distance:
+            closest_distance = distance
+            closest_polygon = poly
+    
+    return closest_polygon
+    
 
 select_aoi(clone)
 
@@ -230,20 +322,14 @@ os.makedirs(output_dir, exist_ok=True)
 
 cont = 0
 polygons = [np.array(poly, dtype=np.int32) for result in results for poly in result.masks.xy if len(poly) > 0]
-n_lines = simpledialog.askinteger("Input", "Digite o número de linhas:")
 zigzag = simpledialog.askstring("Input", "Deseja ordenar em zigue-zague? (sim/não)").lower() == 'sim'
-sorted_polygons = sort_polygons(polygons, n_lines, zigzag)
+sorted_polygons = sort_polygons(polygons, zigzag)
 
 annotated_image = rotated_image.copy()
 data = []
 
 y_min, y_max = np.min([find_centroid(poly)[1] for poly in polygons]), np.max([find_centroid(poly)[1] for poly in polygons])
-line_height = (y_max - y_min) / n_lines
-
-for i in range(1, n_lines):
-    y = int(y_min + i * line_height)
-    cv2.line(annotated_image, (0, y), (annotated_image.shape[1], y), (0, 255, 0), 2)
-    
+  
 for row, col, poly in sorted_polygons:
     mask = np.zeros_like(rotated_image)
     cv2.fillPoly(mask, [expand_polygon(poly, scale=1.1)], (255,) * mask.shape[2])
